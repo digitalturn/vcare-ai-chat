@@ -37,12 +37,12 @@ function detectLanguageStyle(text) {
   if (/[\u0600-\u06FF]/.test(t)) return "urdu";
 
   const romanUrduHints =
-    /(hai|han|haan|acha|achha|karna|krna|mujhe|mje|aap|ap|kya|kis|liye|liya|nahi|nahin|bilkul|sahi|wala|wali|krdo|btao|batayein|chahiye|kaam|theek|masla|issue|tight|timing|weakness)/i.test(
+    /(hai|han|haan|acha|achha|karna|krna|mujhe|mje|aap|ap|kya|kis|liye|liya|nahi|nahin|bilkul|sahi|wala|wali|krdo|btao|batayein|chahiye|kaam|theek|masla|issue|tight|timing|weakness|jaldi|shadi|private|sex)/i.test(
       t
     );
 
   const englishHints =
-    /(need|want|help|price|delivery|how|use|daily|best|for|men|women|buy|order|product|ingredient|results|details)/i.test(
+    /(need|want|help|price|delivery|how|use|daily|best|for|men|women|buy|order|product|ingredient|results|details|timing|stamina)/i.test(
       t
     );
 
@@ -52,16 +52,14 @@ function detectLanguageStyle(text) {
 }
 
 function languageInstruction(style) {
-  if (style === "urdu") {
-    return "Reply in Urdu script naturally.";
-  }
-  if (style === "roman_urdu") {
-    return "Reply naturally in Roman Urdu.";
-  }
-  if (style === "english") {
-    return "Reply naturally in English.";
-  }
+  if (style === "urdu") return "Reply naturally in Urdu script.";
+  if (style === "roman_urdu") return "Reply naturally in Roman Urdu.";
+  if (style === "english") return "Reply naturally in English.";
   return "Reply in the same mixed style as the customer.";
+}
+
+function replySet(style, map) {
+  return map[style] || map.mixed;
 }
 
 function detectIntent(query) {
@@ -112,6 +110,11 @@ function detectIntent(query) {
       "premature",
       "early discharge",
       "jaldi",
+      "early finish",
+      "jaldi farigh",
+      "jaldi discharge",
+      "sex time",
+      "longer time",
     ])
   ) {
     return "delay";
@@ -163,6 +166,7 @@ function detectIntent(query) {
       "private whitening",
       "dark private area",
       "intimate whitening",
+      "private dark",
     ])
   ) {
     return "private_whitening";
@@ -179,6 +183,8 @@ function detectIntent(query) {
       "ingredients",
       "how to use",
       "usage",
+      "how use",
+      "use kaise",
       "result",
       "results",
       "side effect",
@@ -189,11 +195,46 @@ function detectIntent(query) {
       "how long",
       "kitne din",
       "kitna time",
+      "detail",
+      "details",
+      "info",
+      "information",
+      "kaise use karna",
+      "kab lagana",
+      "kitni dafa",
+      "kitni martaba",
     ])
   ) {
     return "product_followup";
   }
 
+  return "general";
+}
+
+function detectMicroIntent(query) {
+  const q = normalizeText(query);
+
+  if (containsAny(q, ["how to use", "usage", "use kaise", "kaise use", "kab lagana", "kitni dafa", "kitni martaba"])) {
+    return "usage";
+  }
+  if (containsAny(q, ["price", "cost", "kitne ka", "kitnay ka", "rate"])) {
+    return "price";
+  }
+  if (containsAny(q, ["delivery", "shipping", "cod", "cash on delivery", "discreet"])) {
+    return "delivery";
+  }
+  if (containsAny(q, ["result", "results", "kitne din", "how long", "kitna time"])) {
+    return "results";
+  }
+  if (containsAny(q, ["safe", "side effect", "side effects", "original", "authentic"])) {
+    return "safety";
+  }
+  if (containsAny(q, ["ingredient", "ingredients", "kis cheez se bana", "composition"])) {
+    return "ingredients";
+  }
+  if (containsAny(q, ["who can use", "kis ke liye", "men", "women"])) {
+    return "eligibility";
+  }
   return "general";
 }
 
@@ -219,6 +260,7 @@ function isYesMessage(text) {
     "show me",
     "dikhao",
     "send",
+    "recommend",
   ]);
 }
 
@@ -283,6 +325,9 @@ function likelyAskingProductDetails(text) {
     "details",
     "info",
     "information",
+    "use kaise",
+    "kaise use",
+    "kab lagana",
   ]);
 }
 
@@ -371,7 +416,7 @@ function buildCatalogContext(products) {
         `Type: ${p.type}`,
         `Price: PKR ${p.price}`,
         `URL: ${p.url}`,
-        `Image: ${p.image_src || ""}`,
+        `Image: ${p.image_src || p.image || ""}`,
         `Description: ${p.description}`,
         `Tags: ${(p.tags || []).join(", ")}`,
       ].join("\n")
@@ -381,7 +426,7 @@ function buildCatalogContext(products) {
 
 function historyText(messages = []) {
   return messages
-    .slice(-10)
+    .slice(-12)
     .map((m) => `${m.role === "assistant" ? "Assistant" : "Customer"}: ${m.text}`)
     .join("\n");
 }
@@ -394,7 +439,7 @@ function getCurrentStage(memoryStage, messages) {
   if (convo.includes("let me connect you with our support consultant")) {
     return "handoff";
   }
-  if (convo.includes("can i suggest") || convo.includes("kya main aap ko best product suggest karun")) {
+  if (convo.includes("can i suggest") || convo.includes("best product suggest")) {
     return "permission_asked";
   }
   if (convo.includes("/products/") || convo.includes("view product") || convo.includes("buy now")) {
@@ -404,16 +449,57 @@ function getCurrentStage(memoryStage, messages) {
   return "cold";
 }
 
-function getPrimaryRecommendedProduct(products, productContext) {
-  if (productContext?.handle) {
-    const current = products.find((p) => p.handle === productContext.handle);
-    if (current) return current;
+function getProductByHandle(products, handle) {
+  if (!handle) return null;
+  return products.find((p) => p.handle === handle) || null;
+}
+
+function extractLastRecommendedHandle(messages = [], allProducts = []) {
+  const joined = historyText(messages).toLowerCase();
+
+  for (const p of allProducts) {
+    if (!p?.handle) continue;
+    if (
+      joined.includes(normalizeText(p.handle)) ||
+      joined.includes(normalizeText(p.title)) ||
+      joined.includes(normalizeText(p.url || ""))
+    ) {
+      return p.handle;
+    }
   }
-  return products[0] || null;
+
+  return "";
+}
+
+function getPrimaryFollowupProduct(allProducts, matchedProducts, productContext, recentMessages) {
+  const currentPageProduct = getProductByHandle(allProducts, productContext?.handle);
+  const lastRecommendedHandle = extractLastRecommendedHandle(recentMessages, allProducts);
+  const lastRecommendedProduct = getProductByHandle(allProducts, lastRecommendedHandle);
+
+  if (lastRecommendedProduct) return lastRecommendedProduct;
+  if (currentPageProduct) return currentPageProduct;
+  if (matchedProducts?.length) return matchedProducts[0];
+  return null;
 }
 
 function shouldImmediateHandoff(text) {
   return isOutOfScopeMessage(text);
+}
+
+function buildHumanTypingText(style, agentName = "Ayesha", mode = "typing") {
+  const map = {
+    typing: replySet(style, {
+      urdu: `${agentName} ٹائپ کر رہی ہیں...`,
+      english: `${agentName} is typing...`,
+      mixed: `${agentName} is typing...`,
+    }),
+    checking: replySet(style, {
+      urdu: `${agentName} تفصیل دیکھ رہی ہیں...`,
+      english: `${agentName} is checking details...`,
+      mixed: `${agentName} details check kar rahi hain...`,
+    }),
+  };
+  return map[mode] || map.typing;
 }
 
 async function callOpenAI(systemPrompt, userPrompt) {
@@ -425,7 +511,7 @@ async function callOpenAI(systemPrompt, userPrompt) {
     },
     body: JSON.stringify({
       model: "gpt-4o-mini",
-      temperature: 0.45,
+      temperature: 0.55,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
@@ -435,6 +521,79 @@ async function callOpenAI(systemPrompt, userPrompt) {
 
   const data = await response.json();
   return data?.choices?.[0]?.message?.content || "";
+}
+
+function buildConcernQuestion(intent, style) {
+  const map = {
+    delay: replySet(style, {
+      urdu: "سمجھ گئی۔ کیا مسئلہ زیادہ تر timing/stamina کا ہے یا جلدی finish ہونے کا؟",
+      english: "I understand. Is your concern mainly timing/stamina or finishing too early?",
+      mixed: "Samajh gayi. Aap ka concern zyada timing/stamina ka hai ya jaldi finish hone ka?",
+    }),
+    energy: replySet(style, {
+      urdu: "سمجھ گئی۔ کیا آپ کو زیادہ weakness محسوس ہوتی ہے یا stamina/performance کا مسئلہ ہے؟",
+      english: "Got it. Is it more about weakness, or stamina/performance?",
+      mixed: "Got it. Yeh zyada weakness ka masla hai ya stamina/performance ka?",
+    }),
+    acne: replySet(style, {
+      urdu: "سمجھ گئی۔ کیا آپ کو زیادہ pimples active ہیں یا oily skin اور marks بھی ہیں؟",
+      english: "Understood. Is it mainly active acne, or acne marks with oily skin as well?",
+      mixed: "Samajh gayi. Zyada active pimples hain ya oily skin aur acne marks bhi hain?",
+    }),
+    glow: replySet(style, {
+      urdu: "سمجھ گئی۔ کیا آپ dull skin کے لیے کچھ چاہتی ہیں یا brightening/glow routine کے لیے؟",
+      english: "Understood. Are you looking for help with dull skin, or a brightening/glow routine?",
+      mixed: "Samajh gayi. Aap dull skin ke liye kuch chahti hain ya brightening/glow routine ke liye?",
+    }),
+    private_whitening: replySet(style, {
+      urdu: "سمجھ گئی۔ کیا concern dark pigmentation کا ہے یا overall private area brightening کا؟",
+      english: "Understood. Is the concern mainly dark pigmentation or overall intimate brightening?",
+      mixed: "Samajh gayi. Concern zyada dark pigmentation ka hai ya overall private area brightening ka?",
+    }),
+    vaginal_tightening: replySet(style, {
+      urdu: "سمجھ گئی۔ کیا concern looseness کا ہے یا confidence/intimate freshness کا بھی؟",
+      english: "Understood. Is the concern mainly looseness, or confidence/intimate freshness as well?",
+      mixed: "Samajh gayi. Concern zyada looseness ka hai ya confidence/intimate freshness ka bhi?",
+    }),
+  };
+
+  return map[intent] || replySet(style, {
+    urdu: "سمجھ گئی۔ آپ کا بنیادی concern تھوڑا سا واضح کر دیں تاکہ میں بہتر guide کر سکوں۔",
+    english: "Got it. Please tell me your main concern a little more clearly so I can guide you properly.",
+    mixed: "Samajh gayi. Apna main concern thora sa aur clear kar dein taa ke main behtar guide kar sakun.",
+  });
+}
+
+function buildPermissionReply(style) {
+  return replySet(style, {
+    urdu: "سمجھ گئی۔ کیا میں آپ کے concern کے مطابق best product suggest کروں؟",
+    english: "Got it. Can I suggest the best product for your concern?",
+    mixed: "Samajh gayi. Kya main aap ke concern ke mutabiq best product suggest karun?",
+  });
+}
+
+function buildNoReply(style) {
+  return replySet(style, {
+    urdu: "بالکل، کوئی مسئلہ نہیں۔ آپ جو پوچھنا چاہیں میں یہاں ہوں۔",
+    english: "Of course, no problem. Feel free to ask anything you want to know.",
+    mixed: "Bilkul, koi masla nahi. Aap jo bhi poochna chahen main yahan hoon.",
+  });
+}
+
+function buildFallbackGeneral(style) {
+  return replySet(style, {
+    urdu: "میں مدد کے لیے یہاں ہوں۔ براہِ کرم اپنا concern تھوڑا سا واضح کریں۔",
+    english: "I’m here to help. Please tell me a little more about your concern.",
+    mixed: "Main madad ke liye yahan hoon. Apna concern thora sa clear kar dein.",
+  });
+}
+
+function buildHandoffReply(style) {
+  return replySet(style, {
+    urdu: "یہ سوال میرے دائرہ کار سے باہر ہے۔ Let me connect you with our support consultant.",
+    english: "This is outside my scope. Let me connect you with our support consultant.",
+    mixed: "Yeh sawal mere scope se bahar hai. Let me connect you with our support consultant.",
+  });
 }
 
 export default async function handler(req, res) {
@@ -468,25 +627,27 @@ export default async function handler(req, res) {
     const productContext = body?.product || null;
     const memoryContext = body?.memory || {};
     const recentMessages = Array.isArray(body?.messages) ? body.messages : [];
+    const agentName = body?.agent_name || "Ayesha";
 
-    const style = memoryContext?.language_style || detectLanguageStyle(userMessage);
+    const style =
+      memoryContext?.language_style || detectLanguageStyle(userMessage);
+
     const intent = detectIntent(userMessage);
+    const microIntent = detectMicroIntent(userMessage);
     const allProducts = loadCatalog();
     const matchedProducts = getTopProducts(allProducts, userMessage, 2);
-    const primaryProduct = getPrimaryRecommendedProduct(matchedProducts, productContext);
     const stage = getCurrentStage(memoryContext?.stage, recentMessages);
     const convoText = historyText(recentMessages);
+    const followupProduct = getPrimaryFollowupProduct(
+      allProducts,
+      matchedProducts,
+      productContext,
+      recentMessages
+    );
 
     if (shouldImmediateHandoff(userMessage)) {
-      const handoffReply =
-        style === "urdu"
-          ? "یہ سوال میرے دائرہ کار سے باہر ہے۔ Let me connect you with our support consultant."
-          : style === "english"
-          ? "This is outside my scope. Let me connect you with our support consultant."
-          : "Yeh sawal mere scope se bahar hai. Let me connect you with our support consultant.";
-
       return res.status(200).json({
-        reply: handoffReply,
+        reply: buildHandoffReply(style),
         intent: "handoff",
         stage: "handoff",
         language_style: style,
@@ -495,102 +656,148 @@ export default async function handler(req, res) {
         should_offer_whatsapp: true,
         should_offer_add_to_cart: false,
         matched_products: [],
+        typing_text: buildHumanTypingText(style, agentName, "checking"),
       });
     }
 
-    if (
-      stage === "cold" &&
+    const concernKnown = !!(memoryContext?.concern && memoryContext.concern !== "general");
+    const userJustSharedConcern =
       intent !== "general" &&
       intent !== "product_followup" &&
       !isYesMessage(userMessage) &&
-      !isNoMessage(userMessage)
-    ) {
-      const askPermissionReply =
-        style === "urdu"
-          ? "سمجھ گئی۔ کیا میں آپ کے مسئلے کے مطابق بہترین پروڈکٹ suggest کروں؟"
-          : style === "english"
-          ? "Got it. Can I suggest the best product for your concern?"
-          : "Samajh gayi. Kya main aap ke concern ke mutabiq best product suggest karun?";
+      !isNoMessage(userMessage);
 
+    if (!concernKnown && stage === "cold" && userJustSharedConcern) {
       return res.status(200).json({
-        reply: askPermissionReply,
+        reply: buildConcernQuestion(intent, style),
         intent,
-        stage: "permission_asked",
+        stage: "engaged",
         language_style: style,
         captured_concern: intent,
         captured_objection: "",
         should_offer_whatsapp: false,
         should_offer_add_to_cart: false,
         matched_products: [],
+        typing_text: buildHumanTypingText(style, agentName, "typing"),
       });
     }
 
-    if (stage === "permission_asked" && isNoMessage(userMessage)) {
-      const noReply =
-        style === "urdu"
-          ? "بالکل، کوئی مسئلہ نہیں۔ آپ جو بھی پوچھنا چاہیں میں یہاں ہوں۔"
-          : style === "english"
-          ? "Of course, no problem. Feel free to ask anything you want to know."
-          : "Bilkul, koi masla nahi. Aap jo bhi poochna chahen main yahan hoon.";
+    const concernNowKnown = memoryContext?.concern || (intent !== "general" && intent !== "product_followup" ? intent : "");
 
+    if (
+      concernNowKnown &&
+      (stage === "engaged" || stage === "cold") &&
+      !likelyAskingProductDetails(userMessage) &&
+      !isYesMessage(userMessage) &&
+      !isNoMessage(userMessage) &&
+      userJustSharedConcern === false &&
+      intent === "general"
+    ) {
       return res.status(200).json({
-        reply: noReply,
-        intent,
-        stage: "engaged",
+        reply: buildPermissionReply(style),
+        intent: concernNowKnown,
+        stage: "permission_asked",
         language_style: style,
-        captured_concern: memoryContext?.concern || intent,
+        captured_concern: concernNowKnown,
         captured_objection: "",
         should_offer_whatsapp: false,
         should_offer_add_to_cart: false,
         matched_products: [],
+        typing_text: buildHumanTypingText(style, agentName, "typing"),
+      });
+    }
+
+    if (stage === "permission_asked" && isNoMessage(userMessage)) {
+      return res.status(200).json({
+        reply: buildNoReply(style),
+        intent: concernNowKnown || intent,
+        stage: "engaged",
+        language_style: style,
+        captured_concern: concernNowKnown || intent,
+        captured_objection: "",
+        should_offer_whatsapp: false,
+        should_offer_add_to_cart: false,
+        matched_products: [],
+        typing_text: buildHumanTypingText(style, agentName, "typing"),
       });
     }
 
     const permissionGranted =
-      stage === "permission_asked" && isYesMessage(userMessage);
+      (stage === "permission_asked" && isYesMessage(userMessage)) ||
+      (stage === "engaged" && isYesMessage(userMessage) && concernNowKnown);
 
     const answeringProductQuestion =
-      stage === "recommended" || intent === "product_followup" || likelyAskingProductDetails(userMessage);
+      stage === "recommended" ||
+      intent === "product_followup" ||
+      likelyAskingProductDetails(userMessage);
 
-    if (answeringProductQuestion && primaryProduct) {
-      const productContextText = buildCatalogContext([primaryProduct]);
+    if (answeringProductQuestion && followupProduct) {
+      const productContextText = buildCatalogContext([followupProduct]);
 
       const systemPrompt = `
-You are Ayesha, a smart, natural Pakistani female sales assistant for VCare Natural.
+You are ${agentName}, a smart, natural Pakistani female sales assistant for VCare Natural.
 
 ${languageInstruction(style)}
 
-Rules:
-- The product has already been suggested before.
-- Answer the customer's product question naturally and clearly.
-- Keep a reassuring, human sales tone.
-- If the customer asks for more details, explain briefly.
-- Encourage them to click View Product for full details.
-- Do not dump many products.
-- Do not ask again "can I suggest a product".
-- If the question goes outside product/support scope, say exactly:
-  "Let me connect you with our support consultant."
-- Do not invent facts not present in the product data.
+You must sound like a real human sales consultant, not a bot.
 
-Current product context:
-${JSON.stringify(productContext, null, 2)}
+Rules:
+- The customer is asking a follow-up about an already relevant product.
+- Stay focused on THIS SAME product unless there is a very strong reason not to.
+- Answer directly first.
+- Do NOT say "click View Product" unless the exact detail is missing from the provided data.
+- Keep replies natural, warm, short, and helpful.
+- If the customer asks how to use, answer usage directly in a practical, cautious, non-medical way.
+- If the customer asks about price, delivery, authenticity, results, safe use, or who can use it, answer clearly from available context.
+- If exact detail is missing, say so politely and then invite them to open the product page for full detail.
+- Do not switch to another product during follow-up.
+- Do not repeat recommendation language unnecessarily.
+- Do not sound medical.
+- If outside scope, say exactly:
+"Let me connect you with our support consultant."
+
+Micro intent: ${microIntent}
+
+Current page context:
+${JSON.stringify(pageContext, null, 2)}
+
+Conversation memory:
+${JSON.stringify(memoryContext, null, 2)}
 
 Conversation history:
 ${convoText}
 
-Primary product:
+Primary follow-up product:
 ${productContextText}
 `;
 
-      const userPrompt = `Customer question: ${userMessage}`;
-      const reply =
-        (await callOpenAI(systemPrompt, userPrompt)) ||
-        (style === "english"
-          ? `Sure. For full details, please click View Product.`
-          : style === "urdu"
-          ? `جی ضرور۔ مکمل تفصیل کے لیے View Product پر کلک کریں۔`
-          : `Ji zarur. Mukammal detail ke liye View Product par click karein.`);
+      const userPrompt = `Customer follow-up: ${userMessage}`;
 
+      const fallbackReply = (() => {
+        if (microIntent === "usage") {
+          return replySet(style, {
+            urdu: "جی ضرور۔ عام طور پر ایسے product کو ہدایات کے مطابق کم مقدار میں استعمال کیا جاتا ہے۔ مکمل usage detail کے لیے product page بھی دیکھ لیں۔",
+            english: "Sure. Generally, this type of product is used in a small amount as directed. For exact usage instructions, please also check the product page.",
+            mixed: "Ji zarur. Aam tor par is tarah ka product hidayaat ke mutabiq kam miqdaar mein use kiya jata hai. Exact usage ke liye product page bhi dekh lein.",
+          });
+        }
+
+        if (microIntent === "price") {
+          return replySet(style, {
+            urdu: `جی، اس کی price PKR ${followupProduct.price || ""} ہے۔`,
+            english: `Yes, its price is PKR ${followupProduct.price || ""}.`,
+            mixed: `Ji, is ki price PKR ${followupProduct.price || ""} hai.`,
+          });
+        }
+
+        return replySet(style, {
+          urdu: "جی ضرور۔ جو detail available ہے میں guide کر سکتی ہوں، اور مکمل detail کے لیے product page بھی دیکھ سکتی ہیں۔",
+          english: "Sure. I can guide you with the details available here, and you can also open the product page for complete details.",
+          mixed: "Ji zarur. Jo detail available hai main guide kar sakti hun, aur complete detail ke liye product page bhi dekh sakte hain.",
+        });
+      })();
+
+      const reply = (await callOpenAI(systemPrompt, userPrompt)) || fallbackReply;
       const needsHandoff =
         normalizeText(reply).includes("let me connect you with our support consultant");
 
@@ -599,7 +806,7 @@ ${productContextText}
         intent: "product_followup",
         stage: needsHandoff ? "handoff" : "recommended",
         language_style: style,
-        captured_concern: memoryContext?.concern || intent,
+        captured_concern: concernNowKnown || memoryContext?.concern || "",
         captured_objection: "",
         should_offer_whatsapp: needsHandoff,
         should_offer_add_to_cart: !needsHandoff,
@@ -607,47 +814,56 @@ ${productContextText}
           ? []
           : [
               {
-                title: primaryProduct.title,
-                handle: primaryProduct.handle,
-                url: primaryProduct.url,
-                price: primaryProduct.price,
-                used_by: primaryProduct.used_by,
-                type: primaryProduct.type,
-                image: primaryProduct.image_src || "",
+                title: followupProduct.title,
+                handle: followupProduct.handle,
+                url: followupProduct.url,
+                price: followupProduct.price,
+                used_by: followupProduct.used_by,
+                type: followupProduct.type,
+                image: followupProduct.image_src || followupProduct.image || "",
               },
             ],
+        typing_text: buildHumanTypingText(style, agentName, "checking"),
       });
     }
 
-    if (permissionGranted || stage === "recommended" || stage === "engaged") {
+    if (permissionGranted || stage === "recommended") {
+      const concernSeed = concernNowKnown || intent || memoryContext?.concern || "";
       const recommended = matchedProducts.length
         ? matchedProducts
-        : memoryContext?.concern
-        ? getTopProducts(allProducts, memoryContext.concern, 2)
+        : concernSeed
+        ? getTopProducts(allProducts, concernSeed, 2)
         : [];
 
       const recommendedContext = buildCatalogContext(recommended);
 
       const systemPrompt = `
-You are Ayesha, a smart, natural Pakistani female sales assistant for VCare Natural.
+You are ${agentName}, a smart, natural Pakistani female sales assistant for VCare Natural.
 
 ${languageInstruction(style)}
 
+You must sound like a real human consultant from Pakistan.
+
 Rules:
-- Talk like a real sales person.
-- First acknowledge the concern in one short natural line.
-- Then recommend the best matching product.
-- If useful, mention one support product only.
-- Mention product name, short reason, price, and product link.
-- Keep it concise, warm, and human.
-- Do not dump many products.
-- Do not list unrelated products.
-- Mention discreet delivery naturally for intimate products.
-- After recommending, remain available for more questions.
-- Never say "Aap apna concern batayein" if concern is already clear.
+- First acknowledge the concern in one natural line.
+- Then recommend the best matching product confidently.
+- Mention only the most suitable main product first.
+- Mention one support product only if genuinely useful.
+- Mention short reason, price, and that they can open the product below.
+- For intimate products, naturally reassure about discreet delivery if relevant.
+- Keep it concise, warm, and sales-oriented.
+- Do not dump a list.
+- Do not ask them to repeat the concern.
+- End with one natural line inviting follow-up questions.
+- Do not sound robotic or overly formal.
+- Do not make medical claims.
+- If you do not have exact fact, do not invent it.
 
 Detected concern:
-${memoryContext?.concern || intent}
+${concernSeed}
+
+Current page product:
+${JSON.stringify(productContext, null, 2)}
 
 Conversation history:
 ${convoText}
@@ -656,21 +872,29 @@ Recommended products:
 ${recommendedContext}
 `;
 
-      const userPrompt = `Customer message: ${userMessage}`;
+      const fallbackReply =
+        recommended.length > 0
+          ? replySet(style, {
+              urdu: `سمجھ گئی۔ آپ کے concern کے لیے ${recommended[0].title} زیادہ suitable لگ رہا ہے۔ اس کی price PKR ${recommended[0].price} ہے۔ میں نیچے product share کر رہی ہوں، آپ چاہیں تو میں usage بھی بتا سکتی ہوں۔`,
+              english: `Understood. For your concern, ${recommended[0].title} looks like the most suitable option. Its price is PKR ${recommended[0].price}. I’m sharing it below, and I can also guide you on usage if you want.`,
+              mixed: `Samajh gayi. Aap ke concern ke liye ${recommended[0].title} zyada suitable lag raha hai. Is ki price PKR ${recommended[0].price} hai. Main neeche product share kar rahi hun, aur agar aap chahen to usage bhi guide kar sakti hun.`,
+            })
+          : replySet(style, {
+              urdu: "میں آپ کے concern کے مطابق ایک suitable option suggest کر سکتی ہوں۔",
+              english: "I can suggest a suitable option for your concern.",
+              mixed: "Main aap ke concern ke mutabiq ek suitable option suggest kar sakti hun.",
+            });
+
       const reply =
-        (await callOpenAI(systemPrompt, userPrompt)) ||
-        (style === "english"
-          ? "I can suggest the best option for you now."
-          : style === "urdu"
-          ? "میں ابھی آپ کے لیے بہترین آپشن suggest کر سکتی ہوں۔"
-          : "Main abhi aap ke liye best option suggest kar sakti hun.");
+        (await callOpenAI(systemPrompt, `Customer message: ${userMessage}`)) ||
+        fallbackReply;
 
       return res.status(200).json({
         reply,
-        intent: memoryContext?.concern || intent,
+        intent: concernSeed,
         stage: "recommended",
         language_style: style,
-        captured_concern: memoryContext?.concern || intent,
+        captured_concern: concernSeed,
         captured_objection: "",
         should_offer_whatsapp: false,
         should_offer_add_to_cart: recommended.length > 0,
@@ -681,42 +905,42 @@ ${recommendedContext}
           price: p.price,
           used_by: p.used_by,
           type: p.type,
-          image: p.image_src || "",
+          image: p.image_src || p.image || "",
         })),
+        typing_text: buildHumanTypingText(style, agentName, "checking"),
       });
     }
 
     const generalPrompt = `
-You are Ayesha, a smart, natural Pakistani female sales assistant for VCare Natural.
+You are ${agentName}, a smart, natural Pakistani female sales assistant for VCare Natural.
 
 ${languageInstruction(style)}
 
 Rules:
-- Be conversational and helpful.
-- Understand the customer and guide them.
-- Do not recommend products yet unless the concern is clear and permission is given.
-- Ask only one useful question if needed.
-- Keep the tone soft, human, and sales-oriented.
+- Sound like a real human sales agent.
+- Be warm, concise, and natural.
+- First understand the customer's concern.
+- Ask at most one useful clarifying question.
+- Do not recommend any product yet unless the concern is understood and permission is given.
+- Do not sound like customer support script text.
+- Do not repeat generic lines.
 `;
 
     const generalReply =
       (await callOpenAI(generalPrompt, `Customer message: ${userMessage}`)) ||
-      (style === "english"
-        ? "I’m here to help. Please tell me a little more about your concern."
-        : style === "urdu"
-        ? "میں مدد کے لیے یہاں ہوں۔ براہِ کرم اپنا مسئلہ تھوڑا سا واضح کریں۔"
-        : "Main madad ke liye yahan hoon. Apna concern thora sa clear kar dein.");
+      buildFallbackGeneral(style);
 
     return res.status(200).json({
       reply: generalReply,
       intent: "general",
       stage: "engaged",
       language_style: style,
-      captured_concern: memoryContext?.concern || "",
+      captured_concern: concernNowKnown || "",
       captured_objection: "",
       should_offer_whatsapp: false,
       should_offer_add_to_cart: false,
       matched_products: [],
+      typing_text: buildHumanTypingText(style, agentName, "typing"),
     });
   } catch (error) {
     console.error("AI chat error:", error);
@@ -732,6 +956,7 @@ Rules:
       should_offer_whatsapp: true,
       should_offer_add_to_cart: false,
       matched_products: [],
+      typing_text: "Connecting support consultant...",
     });
   }
 }
