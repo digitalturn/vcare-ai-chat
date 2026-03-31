@@ -13,14 +13,9 @@ export default async function handler(req, res) {
 
   if (req.method !== "POST") {
     return res.status(200).json({
-      reply: "AI backend connected successfully",
-      intent: "greeting",
-      language_style: "mixed",
-      stage: "cold",
-      should_offer_whatsapp: false,
-      should_offer_add_to_cart: false,
-      captured_concern: "",
-      captured_objection: ""
+      ok: true,
+      mode: "GET",
+      reply: "AI backend connected successfully"
     });
   }
 
@@ -36,67 +31,56 @@ export default async function handler(req, res) {
       return typeof v === "string" ? v.trim() : "";
     }
 
-    const productSummary = product
-      ? {
-          handle: clean(product.handle),
-          title: clean(product.title),
-          description: clean(product.description).slice(0, 3000),
-          type: clean(product.type),
-          vendor: clean(product.vendor),
-          tags: Array.isArray(product.tags) ? product.tags.slice(0, 30) : [],
-          price: clean(product.price),
-          compare_at_price: clean(product.compare_at_price),
-          available: !!product.available,
-          used_by: clean(product.used_by),
-          age_restriction: clean(product.age_restriction),
-          short_benefits: clean(product.short_benefits),
-          usage_notes: clean(product.usage_notes)
-        }
-      : null;
+    const payload = {
+      store: {
+        brand: "VCARE",
+        tone: "warm, natural, female sales support"
+      },
+      page: {
+        type: clean(page.type),
+        url: clean(page.url),
+        title: clean(page.title)
+      },
+      product: product
+        ? {
+            handle: clean(product.handle),
+            title: clean(product.title),
+            description: clean(product.description).slice(0, 3000),
+            type: clean(product.type),
+            vendor: clean(product.vendor),
+            tags: Array.isArray(product.tags) ? product.tags.slice(0, 30) : [],
+            price: clean(product.price),
+            compare_at_price: clean(product.compare_at_price),
+            available: !!product.available,
+            used_by: clean(product.used_by),
+            age_restriction: clean(product.age_restriction),
+            short_benefits: clean(product.short_benefits),
+            usage_notes: clean(product.usage_notes)
+          }
+        : null,
+      memory: {
+        language_style: clean(memory.language_style),
+        concern: clean(memory.concern),
+        objection: clean(memory.objection),
+        stage: clean(memory.stage || "cold")
+      },
+      recent_messages: messages.slice(-10),
+      customer_message: customerMessage
+    };
 
     const systemPrompt = `
 You are a warm, natural, human-like female sales advisor for an e-commerce store.
 
-Your job:
-- answer naturally like a real helpful sales girl
-- sound human, not robotic
-- keep the customer engaged
-- build trust
-- guide toward purchase softly
-- help close the sale when suitable
-
-Strict rules:
+Rules:
 - Never say you are AI.
-- Never sound scripted, overly polished, or too formal.
-- Reply in the same language style as the customer:
-  - Urdu -> Urdu
-  - English -> English
-  - Roman Urdu -> Roman Urdu
-  - Mixed -> Mixed
-- Keep replies short to medium.
-- First answer the question properly, then ask at most one relevant follow-up.
-- Use only the provided page/product/store context.
-- Do not invent product claims, ingredients, guarantees, delivery promises, or medical claims.
-- Do not overpromise.
-- Do not push WhatsApp too early.
-- If the customer is ready, move naturally toward add to cart, order, or WhatsApp help.
-- If the customer is unsure, reduce confusion and build trust.
+- Reply in the same language style as the customer.
+- Keep replies short, natural, and human.
+- First answer properly, then ask at most one relevant follow-up.
+- Use only the provided page/product context.
+- Do not invent medical claims or guarantees.
+- If the customer seems ready, move softly toward add to cart or WhatsApp help.
 
-Intent values allowed:
-product_info
-suitability
-usage
-price
-trust
-comparison
-objection
-ready_to_buy
-wants_human
-shipping_or_cod
-greeting
-unclear
-
-Return strict JSON only in this format:
+Return strict JSON only:
 {
   "reply": "text",
   "intent": "product_info|suitability|usage|price|trust|comparison|objection|ready_to_buy|wants_human|shipping_or_cod|greeting|unclear",
@@ -109,27 +93,6 @@ Return strict JSON only in this format:
 }
 `.trim();
 
-    const payload = {
-      store: {
-        brand: "VCARE",
-        tone: "warm, natural, female sales support"
-      },
-      page: {
-        type: clean(page.type),
-        url: clean(page.url),
-        title: clean(page.title)
-      },
-      product: productSummary,
-      memory: {
-        language_style: clean(memory.language_style),
-        concern: clean(memory.concern),
-        objection: clean(memory.objection),
-        stage: clean(memory.stage || "cold")
-      },
-      recent_messages: messages.slice(-10),
-      customer_message: customerMessage
-    };
-
     const openaiRes = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
@@ -139,14 +102,8 @@ Return strict JSON only in this format:
       body: JSON.stringify({
         model: "gpt-5",
         input: [
-          {
-            role: "system",
-            content: systemPrompt
-          },
-          {
-            role: "user",
-            content: JSON.stringify(payload)
-          }
+          { role: "system", content: systemPrompt },
+          { role: "user", content: JSON.stringify(payload) }
         ],
         text: {
           format: {
@@ -205,37 +162,63 @@ Return strict JSON only in this format:
 
     const raw = await openaiRes.json();
 
+    if (!openaiRes.ok) {
+      return res.status(200).json({
+        reply: "Backend reached OpenAI but OpenAI returned an error.",
+        intent: "unclear",
+        language_style: "mixed",
+        stage: "cold",
+        should_offer_whatsapp: true,
+        should_offer_add_to_cart: false,
+        captured_concern: "",
+        captured_objection: "",
+        debug: raw
+      });
+    }
+
+    if (!raw.output_text) {
+      return res.status(200).json({
+        reply: "OpenAI responded, but output_text was empty.",
+        intent: "unclear",
+        language_style: "mixed",
+        stage: "cold",
+        should_offer_whatsapp: true,
+        should_offer_add_to_cart: false,
+        captured_concern: "",
+        captured_objection: "",
+        debug: raw
+      });
+    }
+
     let out;
     try {
       out = JSON.parse(raw.output_text);
     } catch (e) {
-      out = {
-        reply: "Ji, main aapki help karti hun. Aap apna concern bata dein.",
+      return res.status(200).json({
+        reply: "OpenAI responded, but JSON parsing failed.",
         intent: "unclear",
-        language_style: clean(memory.language_style) || "mixed",
-        stage: clean(memory.stage) || "cold",
-        should_offer_whatsapp: false,
+        language_style: "mixed",
+        stage: "cold",
+        should_offer_whatsapp: true,
         should_offer_add_to_cart: false,
-        captured_concern: clean(memory.concern),
-        captured_objection: clean(memory.objection)
-      };
-    }
-
-    if (!out.reply) {
-      out.reply = "Ji, main aapki help karti hun. Aap apna concern bata dein.";
+        captured_concern: "",
+        captured_objection: "",
+        debug_output_text: raw.output_text
+      });
     }
 
     return res.status(200).json(out);
   } catch (error) {
     return res.status(200).json({
-      reply: "Ji, ek second please. Main aapki help karti hun. Agar chahein tou WhatsApp support par connect kar deti hun.",
+      reply: "Server catch error reached.",
       intent: "unclear",
       language_style: "mixed",
       stage: "cold",
       should_offer_whatsapp: true,
       should_offer_add_to_cart: false,
       captured_concern: "",
-      captured_objection: ""
+      captured_objection: "",
+      debug_error: String(error && error.message ? error.message : error)
     });
   }
 }
